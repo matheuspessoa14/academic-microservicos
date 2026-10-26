@@ -6,35 +6,48 @@ Projeto desenvolvido durante a Unidade Curricular de **Programação Web 2 — S
 
 # 1. Descrição
 
-Este projeto introduz uma arquitetura baseada em **microserviços**, separando a aplicação em dois serviços independentes:
+Este projeto implementa uma arquitetura baseada em **microserviços**, evoluindo a estrutura inicial do Tutorial 01 para uma aplicação com:
+
+- API Gateway;
+- Microserviço de usuários;
+- Microserviço de pedidos;
+- CRUD completo;
+- DTOs e validação;
+- Comunicação entre microserviços;
+- Bancos de dados separados;
+- Prisma ORM;
+- PostgreSQL;
+- Tratamento de erros RPC;
+- Timeout entre serviços.
+
+A arquitetura utilizada é:
 
 ```text
 Cliente HTTP
     │
     ▼
-┌──────────────┐
-│ API Gateway  │
-│   NestJS     │
-└──────┬───────┘
-       │ TCP
-       ▼
-┌──────────────┐
-│ Users Service│
-│ NestJS       │
-│   + Prisma   │
-└──────┬───────┘
-       │
-       ▼
-   PostgreSQL
+API Gateway
+    │
+    ├────────────── TCP ──────────────► Users Service
+    │                                      │
+    │                                      ▼
+    │                                   users_db
+    │
+    └────────────── TCP ──────────────► Orders Service
+                                           │
+                                           ├── TCP ─────► Users Service
+                                           │
+                                           ▼
+                                        orders_db
 ```
 
-O **API Gateway** recebe as requisições HTTP dos clientes.
+O **API Gateway** recebe as requisições HTTP e encaminha as operações para os microserviços.
 
-O **Users Microservice** é responsável pelas regras relacionadas aos usuários e pela persistência dos dados.
+O **Users Service** é responsável pelo domínio de usuários.
 
-A comunicação entre os dois serviços é realizada através do transporte **TCP nativo do NestJS**.
+O **Orders Service** é responsável pelo domínio de pedidos e consulta o Users Service para verificar se um usuário existe antes de criar ou atualizar um pedido.
 
-A aplicação utiliza o **Prisma ORM** para comunicação com o banco de dados **PostgreSQL**.
+Cada microserviço possui seu próprio banco de dados.
 
 ---
 
@@ -42,18 +55,26 @@ A aplicação utiliza o **Prisma ORM** para comunicação com o banco de dados *
 
 O projeto possui as seguintes funcionalidades:
 
-- API Gateway responsável pelas requisições HTTP;
-- Users Service executado como microserviço independente;
-- Comunicação entre serviços utilizando TCP;
-- Utilização de `ClientProxy`;
-- Utilização de `@MessagePattern`;
-- Consulta de todos os usuários;
+- Criação de usuários;
+- Listagem de usuários;
 - Consulta de usuário por ID;
-- Persistência dos usuários em PostgreSQL;
-- Integração com Prisma ORM;
-- Separação entre acesso HTTP e regras de negócio;
-- Separação da responsabilidade de persistência;
-- Execução independente do API Gateway e do Users Service.
+- Atualização de usuários;
+- Exclusão de usuários;
+- Criação de pedidos;
+- Listagem de pedidos;
+- Consulta de pedido por ID;
+- Atualização de pedidos;
+- Exclusão de pedidos;
+- Listagem de pedidos por usuário;
+- Validação de existência do usuário antes da criação de pedidos;
+- Bloqueio da exclusão de usuários que possuem pedidos;
+- Validação de dados através de DTOs;
+- Comunicação TCP entre aplicações NestJS;
+- Comunicação entre Orders Service e Users Service;
+- Persistência com Prisma ORM;
+- Bancos PostgreSQL independentes;
+- Timeout nas chamadas realizadas pelo API Gateway;
+- Tratamento de erros em comunicação RPC.
 
 ---
 
@@ -63,8 +84,13 @@ O projeto possui as seguintes funcionalidades:
 - **NestJS**
 - **TypeScript**
 - **@nestjs/microservices**
+- **class-validator**
+- **class-transformer**
 - **Prisma ORM 7**
+- **@prisma/adapter-pg**
 - **PostgreSQL**
+- **pg**
+- **RxJS**
 - **TCP**
 - **Rspack**
 - **npm**
@@ -73,49 +99,90 @@ O projeto possui as seguintes funcionalidades:
 
 ---
 
-# 4. Arquitetura e Organização do Projeto
+# 4. Arquitetura da Aplicação
 
-A aplicação utiliza uma arquitetura distribuída composta por dois serviços.
+A aplicação utiliza uma arquitetura distribuída composta por três aplicações NestJS.
 
 ```text
 Cliente
    │
    │ HTTP
    ▼
-API Gateway
-   │
-   │ ClientProxy
-   │ TCP
-   ▼
-Users Microservice
-   │
-   │ @MessagePattern
-   ▼
-UsersService
-   │
-   ▼
-PrismaService
-   │
-   ▼
-Prisma ORM
-   │
-   ▼
-PostgreSQL
+┌──────────────────┐
+│   API Gateway    │
+│     :3000        │
+└────────┬─────────┘
+         │
+         │ TCP
+         │
+    ┌────┴───────────────┐
+    │                    │
+    ▼                    ▼
+┌──────────────┐   ┌──────────────┐
+│ Users Service│   │Orders Service│
+│    :3001     │   │    :3002     │
+└──────┬───────┘   └──────┬───────┘
+       │                  │
+       ▼                  ▼
+   Prisma ORM         Prisma ORM
+       │                  │
+       ▼                  ▼
+   users_db           orders_db
 ```
 
-Responsabilidades:
+Além disso, o Orders Service realiza comunicação síncrona com o Users Service:
 
-- `API Gateway` — recebe as requisições HTTP;
-- `ClientProxy` — envia mensagens ao microserviço;
-- `Users Microservice` — recebe mensagens TCP;
-- `UsersController` — utiliza `@MessagePattern` para tratar mensagens;
-- `UsersService` — contém a lógica relacionada aos usuários;
-- `PrismaService` — disponibiliza o Prisma Client para a aplicação;
-- `PostgreSQL` — realiza a persistência dos dados.
+```text
+Orders Service
+      │
+      │ users.findOne
+      ▼
+Users Service
+      │
+      ▼
+users_db
+```
 
 ---
 
-# 5. Estrutura do Projeto
+# 5. Responsabilidades dos Serviços
+
+## API Gateway
+
+Responsável por:
+
+- Receber requisições HTTP;
+- Validar DTOs;
+- Encaminhar mensagens TCP;
+- Aplicar timeout nas chamadas;
+- Traduzir erros RPC para respostas HTTP;
+- Orquestrar operações entre serviços quando necessário.
+
+## Users Service
+
+Responsável por:
+
+- Criar usuários;
+- Consultar usuários;
+- Atualizar usuários;
+- Excluir usuários;
+- Persistir dados em `users_db`.
+
+## Orders Service
+
+Responsável por:
+
+- Criar pedidos;
+- Consultar pedidos;
+- Atualizar pedidos;
+- Excluir pedidos;
+- Listar pedidos por usuário;
+- Validar usuários através do Users Service;
+- Persistir dados em `orders_db`.
+
+---
+
+# 6. Estrutura do Projeto
 
 A aplicação utiliza o modelo de **monorepo do NestJS**.
 
@@ -126,21 +193,49 @@ academic-microservicos/
 │   │   └── src/
 │   │       ├── app.module.ts
 │   │       ├── main.ts
-│   │       └── users.controller.ts
+│   │       ├── users.controller.ts
+│   │       ├── orders.controller.ts
+│   │       └── rpc-to-http-exception.filter.ts
 │   │
-│   └── users/
+│   ├── users/
+│   │   └── src/
+│   │       ├── main.ts
+│   │       ├── prisma.service.ts
+│   │       ├── users.module.ts
+│   │       ├── users.controller.ts
+│   │       └── users.service.ts
+│   │
+│   └── orders/
 │       └── src/
-│           ├── generated/
-│           │   └── prisma/
 │           ├── main.ts
 │           ├── prisma.service.ts
-│           ├── users.controller.ts
-│           ├── users.module.ts
-│           └── users.service.ts
+│           ├── orders.module.ts
+│           ├── orders.controller.ts
+│           └── orders.service.ts
+│
+├── libs/
+│   └── contracts/
+│       └── src/
+│           ├── index.ts
+│           ├── users.dto.ts
+│           ├── orders.dto.ts
+│           └── http-to-rpc-exception.filter.ts
 │
 ├── prisma/
-│   ├── migrations/
-│   └── schema.prisma
+│   ├── users/
+│   │   ├── schema.prisma
+│   │   └── migrations/
+│   │
+│   ├── orders/
+│   │   ├── schema.prisma
+│   │   └── migrations/
+│   │
+│   ├── users.config.ts
+│   └── orders.config.ts
+│
+├── generated/
+│   ├── users/
+│   └── orders/
 │
 ├── .env
 ├── nest-cli.json
@@ -151,7 +246,7 @@ academic-microservicos/
 
 ---
 
-# 6. Pré-requisitos
+# 7. Pré-requisitos
 
 Antes de executar o projeto, é necessário possuir:
 
@@ -169,27 +264,27 @@ npm install -g @nestjs/cli
 
 ---
 
-# 7. Instalação
+# 8. Instalação
 
-## 7.1 Clone o repositório
+## 8.1 Clone o repositório
 
 ```bash
 git clone https://github.com/matheuspessoa14/academic-microservicos.git
 ```
 
-## 7.2 Acesse o projeto
+## 8.2 Acesse a pasta
 
 ```bash
 cd academic-microservicos
 ```
 
-## 7.3 Acesse a branch da atividade
+## 8.3 Acesse a branch do Tutorial 02
 
 ```bash
-git switch branch_20261006
+git switch branch_20261020
 ```
 
-## 7.4 Instale as dependências
+## 8.4 Instale as dependências
 
 ```bash
 npm install
@@ -197,38 +292,111 @@ npm install
 
 ---
 
-# 8. Configuração do PostgreSQL
+# 9. Bibliotecas Compartilhadas
 
-O projeto utiliza PostgreSQL para persistência dos usuários.
+O projeto possui uma biblioteca compartilhada:
 
-Acesse o PostgreSQL:
-
-```bash
-psql -U postgres
+```text
+libs/contracts
 ```
 
-Crie o banco:
+Ela contém contratos utilizados pelas aplicações, como:
 
-```sql
-CREATE DATABASE microservices_users;
+```text
+CreateUserDto
+UpdateUserDto
+CreateOrderDto
+UpdateOrderDto
+HttpToRpcExceptionFilter
 ```
 
-Saia do PostgreSQL:
+Os serviços compartilham apenas contratos e estruturas de comunicação.
 
-```sql
-\q
-```
+Eles não compartilham diretamente regras de negócio ou acesso aos bancos de dados.
 
 ---
 
-# 9. Configuração das Variáveis de Ambiente
+# 10. DTOs e Validação
 
-Crie um arquivo `.env` na raiz do projeto.
+O projeto utiliza:
 
-Exemplo:
+```text
+class-validator
+class-transformer
+```
+
+Os DTOs são responsáveis pela validação dos dados recebidos.
+
+Exemplo de usuário:
+
+```text
+CreateUserDto
+├── name
+└── email
+```
+
+Exemplo de pedido:
+
+```text
+CreateOrderDto
+├── userId
+├── description
+└── total
+```
+
+A aplicação utiliza:
+
+```ts
+new ValidationPipe({
+  whitelist: true,
+  transform: true,
+});
+```
+
+O `whitelist` remove propriedades que não fazem parte do DTO.
+
+O `transform` permite transformar os valores recebidos para os tipos esperados.
+
+---
+
+# 11. Configuração dos Bancos
+
+O projeto utiliza dois bancos PostgreSQL independentes.
+
+```text
+Users Service
+     ↓
+users_db
+```
+
+```text
+Orders Service
+     ↓
+orders_db
+```
+
+Criação:
+
+```sql
+CREATE DATABASE users_db;
+```
+
+```sql
+CREATE DATABASE orders_db;
+```
+
+Essa separação evita que os microserviços acessem diretamente os dados pertencentes a outros domínios.
+
+---
+
+# 12. Variáveis de Ambiente
+
+Crie um arquivo `.env` na raiz:
 
 ```env
-DATABASE_URL="postgresql://postgres:SUA_SENHA@localhost:5432/microservices_users"
+USERS_DATABASE_URL="postgresql://postgres:SUA_SENHA@localhost:5432/users_db"
+
+ORDERS_DATABASE_URL="postgresql://postgres:SUA_SENHA@localhost:5432/orders_db"
 ```
 
 Substitua:
@@ -237,11 +405,9 @@ Substitua:
 SUA_SENHA
 ```
 
-pela senha configurada no PostgreSQL.
+pela senha local do PostgreSQL.
 
-O arquivo `.env` contém informações específicas do ambiente e não deve ser enviado para o GitHub.
-
-Ele deve permanecer no `.gitignore`.
+O `.env` não deve ser versionado.
 
 ```gitignore
 .env
@@ -249,292 +415,414 @@ Ele deve permanecer no `.gitignore`.
 
 ---
 
-# 10. Prisma ORM
+# 13. Prisma — Users Service
 
-O Prisma é responsável pela comunicação entre o **Users Service** e o PostgreSQL.
+Schema:
 
-O modelo utilizado é:
+```text
+prisma/users/schema.prisma
+```
+
+Modelo:
 
 ```prisma
 model User {
-  id   Int    @id @default(autoincrement())
-  name String
+  id        Int      @id @default(autoincrement())
+  name      String
+  email     String   @unique
+  createdAt DateTime @default(now())
 }
 ```
 
-Arquitetura:
+Cada usuário possui:
+
+```text
+User
+├── id
+├── name
+├── email
+└── createdAt
+```
+
+---
+
+# 14. Prisma — Orders Service
+
+Schema:
+
+```text
+prisma/orders/schema.prisma
+```
+
+Modelo:
+
+```prisma
+model Order {
+  id          Int      @id @default(autoincrement())
+  userId      Int
+  description String
+  total       Decimal  @db.Decimal(10, 2)
+  createdAt   DateTime @default(now())
+}
+```
+
+Cada pedido possui:
+
+```text
+Order
+├── id
+├── userId
+├── description
+├── total
+└── createdAt
+```
+
+Não existe uma relação Prisma direta entre `Order` e `User`.
+
+O campo `userId` representa apenas o identificador do usuário pertencente ao outro microserviço.
+
+---
+
+# 15. Migrations
+
+## Users
+
+```bash
+npx prisma migrate dev --config prisma/users.config.ts --name init_users
+```
+
+Gerar client:
+
+```bash
+npx prisma generate --config prisma/users.config.ts
+```
+
+## Orders
+
+```bash
+npx prisma migrate dev --config prisma/orders.config.ts --name init_orders
+```
+
+Gerar client:
+
+```bash
+npx prisma generate --config prisma/orders.config.ts
+```
+
+---
+
+# 16. PrismaService
+
+Cada microserviço possui seu próprio `PrismaService`.
 
 ```text
 UsersService
-     ↓
-PrismaService
-     ↓
-Prisma Client
-     ↓
-PostgreSQL
+    ↓
+Users PrismaService
+    ↓
+users_db
 ```
 
-O API Gateway não acessa diretamente o banco.
-
 ```text
-              ❌ Evitar
-
-API Gateway ──────────► PostgreSQL
-     │
-     └────► Users Service
+OrdersService
+    ↓
+Orders PrismaService
+    ↓
+orders_db
 ```
 
-A arquitetura utilizada é:
+O API Gateway não utiliza Prisma diretamente.
+
+---
+
+# 17. Comunicação entre os Serviços
+
+A comunicação interna utiliza:
 
 ```text
-              ✓ Utilizado
+Transport.TCP
+```
 
-API Gateway
-     ↓
+Portas utilizadas:
+
+| Aplicação | Porta | Protocolo |
+| --- | ---: | --- |
+| API Gateway | 3000 | HTTP |
+| Users Service | 3001 | TCP |
+| Orders Service | 3002 | TCP |
+
+O API Gateway utiliza:
+
+```ts
+ClientProxy.send()
+```
+
+O microserviço recebe utilizando:
+
+```ts
+@MessagePattern()
+```
+
+---
+
+# 18. Message Patterns — Users
+
+O Users Service disponibiliza:
+
+```text
+users.create
+users.findAll
+users.findOne
+users.update
+users.remove
+```
+
+Exemplo:
+
+```text
+Gateway
+   │
+   │ users.findOne
+   ▼
 Users Service
-     ↓
-Prisma
-     ↓
-PostgreSQL
 ```
 
 ---
 
-# 11. Gerando o Prisma Client
+# 19. Message Patterns — Orders
 
-Após configurar o banco e o arquivo `.env`, execute:
-
-```bash
-npx prisma generate
-```
-
-O Prisma Client será gerado em:
+O Orders Service disponibiliza:
 
 ```text
-apps/users/src/generated/prisma
+orders.create
+orders.findAll
+orders.findOne
+orders.findByUser
+orders.update
+orders.remove
 ```
-
----
-
-# 12. Migrations
-
-Para criar e aplicar a migration inicial:
-
-```bash
-npx prisma migrate dev --name init
-```
-
-As migrations ficam armazenadas em:
-
-```text
-prisma/migrations/
-```
-
-Para verificar o status:
-
-```bash
-npx prisma migrate status
-```
-
----
-
-# 13. Dados de Teste
-
-Durante o desenvolvimento foram utilizados usuários para testar a persistência.
 
 Exemplo:
 
-```sql
-INSERT INTO "User" (name)
-VALUES
-  ('Ana'),
-  ('Matheus');
-```
-
-Consulta:
-
-```sql
-SELECT * FROM "User";
-```
-
-Exemplo de resultado:
-
 ```text
-id | name
----+---------
-1  | Ana
-2  | Matheus
+Gateway
+   │
+   │ orders.create
+   ▼
+Orders Service
 ```
 
 ---
 
-# 14. Users Microservice
+# 20. Comunicação Orders → Users
 
-O Users Service utiliza:
+Ao criar um pedido, Orders precisa verificar se o usuário existe.
 
-```ts
-NestFactory.createMicroservice(...)
-```
-
-com transporte TCP.
-
-Exemplo:
-
-```ts
-const app = await NestFactory.createMicroservice(UsersModule, {
-  transport: Transport.TCP,
-  options: {
-    host: 'localhost',
-    port: 3001,
-  },
-});
-```
-
-O microserviço fica aguardando mensagens na porta:
+O fluxo é:
 
 ```text
-3001
+Orders Service
+      │
+      │ users.findOne
+      ▼
+Users Service
+      │
+      ▼
+users_db
 ```
 
-Essa porta utiliza **TCP**, e não HTTP.
-
----
-
-# 15. MessagePattern
-
-Diferentemente de uma API REST tradicional, o Users Microservice não utiliza `@Get()` para receber as requisições provenientes do Gateway.
-
-Ele utiliza:
-
-```ts
-@MessagePattern('users.findAll')
-```
-
-e:
-
-```ts
-@MessagePattern('users.findOne')
-```
-
-Comparação:
+Somente depois da validação:
 
 ```text
-REST                         Microservice
-
-@Get('/users')               @MessagePattern('users.findAll')
-       │                                  │
-       ▼                                  ▼
-Requisição HTTP                     Mensagem TCP
-```
-
----
-
-# 16. API Gateway
-
-O API Gateway é responsável por receber requisições HTTP.
-
-Ele utiliza:
-
-```ts
-NestFactory.create(...)
-```
-
-e roda na porta:
-
-```text
-3000
-```
-
-O Gateway possui um cliente TCP registrado através do:
-
-```text
-ClientsModule
-```
-
-O serviço é identificado como:
-
-```text
-USERS_SERVICE
-```
-
-e se conecta ao microserviço através de:
-
-```text
-localhost:3001
-```
-
----
-
-# 17. Comunicação HTTP → TCP
-
-Quando o cliente executa:
-
-```http
-GET /users
-```
-
-o API Gateway executa:
-
-```ts
-this.usersClient.send(
-  'users.findAll',
-  {},
-);
-```
-
-O Users Microservice captura a mensagem através de:
-
-```ts
-@MessagePattern('users.findAll')
+Orders Service
+      │
+      ▼
+orders_db
 ```
 
 Fluxo completo:
 
 ```text
-GET /users
-    │
-    ▼
+POST /orders
+      │
+      ▼
 API Gateway
-    │
-    │ ClientProxy.send()
-    ▼
-TCP
-    │
-    ▼
-Users Microservice
-    │
-    │ @MessagePattern()
-    ▼
-UsersService
-    │
-    ▼
-Prisma
-    │
-    ▼
-PostgreSQL
-    │
-    ▼
-Resultado
-    │
-    ▼
-API Gateway
-    │
-    ▼
-HTTP Response
+      │
+      │ orders.create
+      ▼
+Orders Service
+      │
+      │ users.findOne
+      ▼
+Users Service
+      │
+      ▼
+users_db
+      │
+      ▼
+usuário existe
+      │
+      ▼
+Orders Service
+      │
+      ▼
+orders_db
 ```
 
 ---
 
-# 18. Endpoints
+# 21. Request-Response com `send()`
 
-| Método | Endpoint | Descrição |
-| --- | --- | --- |
-| `GET` | `/users` | Lista todos os usuários |
-| `GET` | `/users/:id` | Busca um usuário pelo ID |
+A comunicação síncrona utiliza:
+
+```ts
+client.send(...)
+```
+
+O método retorna um `Observable`.
+
+Quando é necessário aguardar diretamente a resposta, é utilizado:
+
+```ts
+firstValueFrom(...)
+```
+
+Exemplo conceitual:
+
+```text
+Orders
+   │
+   │ send('users.findOne')
+   ▼
+Users
+   │
+   │ resposta
+   ▼
+Orders
+```
 
 ---
 
-# 19. Exemplos de Requisição e Resposta
+# 22. Timeout
+
+O projeto utiliza timeout de:
+
+```text
+3000 ms
+```
+
+Exemplo:
+
+```ts
+.pipe(
+  timeout(3000),
+)
+```
+
+O objetivo é evitar que uma requisição fique aguardando indefinidamente um serviço indisponível.
+
+---
+
+# 23. Tratamento de Erros RPC
+
+Em uma arquitetura de microserviços, uma exceção HTTP criada dentro de um serviço TCP não deve ser tratada automaticamente como uma resposta HTTP.
+
+Por isso o projeto utiliza filtros para conversão de erros.
+
+Fluxo:
+
+```text
+Erro interno
+    ↓
+HttpToRpcExceptionFilter
+    ↓
+Erro RPC
+    ↓
+API Gateway
+    ↓
+RpcToHttpExceptionFilter
+    ↓
+Resposta HTTP
+```
+
+Isso permite padronizar os erros entre as aplicações.
+
+---
+
+# 24. API Gateway
+
+O Gateway disponibiliza as rotas HTTP para o cliente.
+
+O cliente não precisa conhecer:
+
+```text
+localhost:3001
+localhost:3002
+```
+
+Ele acessa apenas:
+
+```text
+http://localhost:3000
+```
+
+O Gateway decide qual microserviço deverá atender cada operação.
+
+---
+
+# 25. Endpoints de Users
+
+| Método | Endpoint | Descrição |
+| --- | --- | --- |
+| `POST` | `/users` | Cria um usuário |
+| `GET` | `/users` | Lista os usuários |
+| `GET` | `/users/:id` | Busca usuário por ID |
+| `PATCH` | `/users/:id` | Atualiza usuário |
+| `DELETE` | `/users/:id` | Exclui usuário |
+
+---
+
+# 26. Endpoints de Orders
+
+| Método | Endpoint | Descrição |
+| --- | --- | --- |
+| `POST` | `/orders` | Cria um pedido |
+| `GET` | `/orders` | Lista os pedidos |
+| `GET` | `/orders/:id` | Busca pedido por ID |
+| `GET` | `/orders/user/:userId` | Lista pedidos de um usuário |
+| `PATCH` | `/orders/:id` | Atualiza pedido |
+| `DELETE` | `/orders/:id` | Exclui pedido |
+
+---
+
+# 27. Exemplos — Users
+
+## Criar usuário
+
+```http
+POST /users
+Content-Type: application/json
+```
+
+```json
+{
+  "name": "Matheus",
+  "email": "matheus@email.com"
+}
+```
+
+Exemplo de resposta:
+
+```json
+{
+  "id": 1,
+  "name": "Matheus",
+  "email": "matheus@email.com",
+  "createdAt": "2026-10-26T20:00:00.000Z"
+}
+```
+
+---
 
 ## Listar usuários
 
@@ -542,162 +830,372 @@ HTTP Response
 GET /users
 ```
 
-Exemplo de resposta:
+---
 
-```json
-[
-  {
-    "id": 1,
-    "name": "Ana"
-  },
-  {
-    "id": 2,
-    "name": "Matheus"
-  }
-]
-```
-
-## Buscar usuário por ID
+## Buscar usuário
 
 ```http
 GET /users/1
 ```
 
-Exemplo:
+---
+
+## Atualizar usuário
+
+```http
+PATCH /users/1
+Content-Type: application/json
+```
 
 ```json
 {
-  "id": 1,
-  "name": "Ana"
+  "name": "Matheus Pessoa"
 }
 ```
 
 ---
 
-# 20. Execução do Projeto
+## Excluir usuário
 
-Como existem duas aplicações independentes, são necessários dois terminais.
+```http
+DELETE /users/1
+```
 
-## Terminal 1 — Users Microservice
+---
+
+# 28. Exemplos — Orders
+
+## Criar pedido
+
+```http
+POST /orders
+Content-Type: application/json
+```
+
+```json
+{
+  "userId": 1,
+  "description": "Notebook",
+  "total": 4500
+}
+```
+
+Exemplo de resposta:
+
+```json
+{
+  "id": 1,
+  "userId": 1,
+  "description": "Notebook",
+  "total": "4500",
+  "createdAt": "2026-10-26T20:00:00.000Z"
+}
+```
+
+---
+
+## Listar pedidos
+
+```http
+GET /orders
+```
+
+---
+
+## Buscar pedido
+
+```http
+GET /orders/1
+```
+
+---
+
+## Pedidos por usuário
+
+```http
+GET /orders/user/1
+```
+
+---
+
+## Atualizar pedido
+
+```http
+PATCH /orders/1
+Content-Type: application/json
+```
+
+```json
+{
+  "description": "Notebook Gamer",
+  "total": 5500
+}
+```
+
+---
+
+## Excluir pedido
+
+```http
+DELETE /orders/1
+```
+
+---
+
+# 29. Validação de Usuário no Orders Service
+
+O Orders Service não cria pedidos para usuários inexistentes.
+
+Ao receber:
+
+```text
+POST /orders
+```
+
+o serviço consulta:
+
+```text
+users.findOne
+```
+
+Se o usuário não existir, o pedido não é persistido.
+
+Exemplo inválido:
+
+```json
+{
+  "userId": 999999,
+  "description": "Teste",
+  "total": 100
+}
+```
+
+Resultado esperado:
+
+```text
+Usuário inválido
+```
+
+---
+
+# 30. Regra para Exclusão de Usuários
+
+Um usuário que possui pedidos não pode ser excluído.
+
+Antes da exclusão:
+
+```text
+DELETE /users/:id
+```
+
+o Gateway consulta:
+
+```text
+orders.findByUser
+```
+
+Fluxo:
+
+```text
+DELETE /users/1
+       │
+       ▼
+API Gateway
+       │
+       │ orders.findByUser
+       ▼
+Orders Service
+       │
+       ▼
+Pedidos encontrados?
+       │
+   ┌───┴────┐
+   │        │
+  SIM      NÃO
+   │        │
+   ▼        ▼
+Bloqueia   Users Service
+exclusão       │
+               ▼
+           remove user
+```
+
+Mensagem utilizada:
+
+```text
+Não é possível excluir um usuário que possui pedidos
+```
+
+---
+
+# 31. Execução do Projeto
+
+São necessários três terminais.
+
+## Terminal 1 — Users Service
 
 ```bash
 npx nest start users --watch
 ```
 
-O serviço utiliza:
+Porta:
 
 ```text
-localhost:3001
+3001
 ```
 
-através de TCP.
+---
 
-## Terminal 2 — API Gateway
+## Terminal 2 — Orders Service
+
+```bash
+npx nest start orders --watch
+```
+
+Porta:
+
+```text
+3002
+```
+
+---
+
+## Terminal 3 — API Gateway
 
 ```bash
 npx nest start api-gateway --watch
 ```
 
-O Gateway estará disponível em:
+Porta:
 
 ```text
-http://localhost:3000
+3000
 ```
 
 ---
 
-# 21. Build
+# 32. Build
 
-Para verificar a compilação do Users Service:
+Para validar o Users Service:
 
 ```bash
 npx nest build users
 ```
 
-Para verificar a compilação do API Gateway:
+Para validar o Orders Service:
+
+```bash
+npx nest build orders
+```
+
+Para validar o API Gateway:
 
 ```bash
 npx nest build api-gateway
 ```
 
-Os dois serviços devem compilar sem erros antes do envio da atividade.
+Os três projetos devem compilar sem erros antes do envio.
 
 ---
 
-# 22. Testes Realizados
+# 33. Testes Realizados
 
-Foram realizados testes de comunicação entre os serviços e acesso ao banco de dados.
-
-Foram testados:
+Foram testadas as seguintes operações:
 
 ```text
-GET /users
-GET /users/1
-GET /users/2
+POST   /users
+GET    /users
+GET    /users/:id
+PATCH  /users/:id
+DELETE /users/:id
 ```
 
-Também foram verificados:
+Também foram testadas:
 
 ```text
-API Gateway → HTTP
-API Gateway → ClientProxy
-ClientProxy → TCP
-TCP → Users Microservice
-UsersController → @MessagePattern
-UsersService → Prisma
-Prisma → PostgreSQL
+POST   /orders
+GET    /orders
+GET    /orders/:id
+GET    /orders/user/:userId
+PATCH  /orders/:id
+DELETE /orders/:id
 ```
 
-Além dos testes HTTP, foram realizados os builds:
+Também foram validados:
 
-```bash
-npx nest build users
-```
+- Criação de pedido com usuário existente;
+- Rejeição de pedido para usuário inexistente;
+- Comunicação entre Orders e Users;
+- Persistência separada em PostgreSQL;
+- Atualização de pedidos;
+- Exclusão de pedidos;
+- Busca de pedidos por usuário;
+- Bloqueio de exclusão de usuário que possui pedidos;
+- Timeout entre serviços;
+- Tratamento de erros RPC;
+- Compilação dos três projetos.
 
-```bash
-npx nest build api-gateway
+---
+
+# 34. Fluxo Completo de Criação de Pedido
+
+```text
+Cliente
+   │
+   │ POST /orders
+   ▼
+API Gateway
+   │
+   │ orders.create
+   ▼
+Orders Service
+   │
+   │ users.findOne
+   ▼
+Users Service
+   │
+   ▼
+Prisma Users
+   │
+   ▼
+users_db
+   │
+   ▼
+Resposta do usuário
+   │
+   ▼
+Orders Service
+   │
+   ▼
+Prisma Orders
+   │
+   ▼
+orders_db
+   │
+   ▼
+API Gateway
+   │
+   ▼
+Cliente
 ```
 
 ---
 
-# 23. Conceitos Estudados
+# 35. Monólito x Microserviços
 
-Nesta atividade foram estudados:
-
-- Arquitetura de microserviços;
-- Monorepo NestJS;
-- Separação entre aplicações;
-- API Gateway;
-- Comunicação entre serviços;
-- Transporte TCP;
-- `ClientsModule`;
-- `ClientProxy`;
-- `@MessagePattern`;
-- Comunicação HTTP → TCP;
-- Serviços independentes;
-- Prisma ORM;
-- PostgreSQL;
-- Persistência de dados;
-- Database per Service;
-- Separação de responsabilidades.
-
----
-
-# 24. Arquitetura Antes e Depois
-
-Em uma aplicação tradicional:
+Em uma aplicação monolítica:
 
 ```text
 Controller
     ↓
 Service
     ↓
-Prisma
+Repository / ORM
     ↓
-PostgreSQL
+Banco
 ```
 
-Na arquitetura implementada:
+Neste projeto:
 
 ```text
 HTTP Controller
@@ -708,20 +1206,149 @@ ClientProxy
       ↓
 TCP
       ↓
-@MessagePattern
+MessagePattern
       ↓
-UsersService
+Microserviço
       ↓
 Prisma
       ↓
-PostgreSQL
+Banco próprio
 ```
 
-A principal diferença é que o Gateway e o serviço de usuários são executados como **processos/aplicações independentes**.
+Os serviços são executados como aplicações independentes.
 
 ---
 
-# 25. Versionamento e Organização das Branches
+# 36. Banco por Microserviço
+
+A aplicação segue o princípio de que cada serviço controla seus próprios dados.
+
+```text
+Users Service
+     │
+     ▼
+users_db
+```
+
+```text
+Orders Service
+     │
+     ▼
+orders_db
+```
+
+O Orders Service não acessa diretamente `users_db`.
+
+O Users Service não acessa diretamente `orders_db`.
+
+A comunicação entre domínios acontece por mensagens.
+
+---
+
+# 37. `send()` e Comunicação Síncrona
+
+Neste tutorial foi utilizado principalmente:
+
+```ts
+client.send(...)
+```
+
+Essa abordagem implementa o padrão:
+
+```text
+Request
+   ↓
+Microserviço
+   ↓
+Response
+```
+
+O serviço que envia a mensagem aguarda uma resposta.
+
+Isso cria uma dependência síncrona entre os serviços.
+
+---
+
+# 38. Limitações da Implementação
+
+O projeto possui características de estudo e laboratório.
+
+Em aplicações de produção ainda seriam necessários recursos adicionais, como:
+
+- Autenticação;
+- Autorização;
+- Logs estruturados;
+- Métricas;
+- Correlation IDs;
+- Rastreamento distribuído;
+- Retries controlados;
+- Circuit breaker;
+- Tratamento mais avançado de indisponibilidade;
+- Persistência de mensagens;
+- Segurança da comunicação interna;
+- Estratégias de consistência distribuída.
+
+---
+
+# 39. Conceitos Estudados
+
+Durante o Tutorial 02 foram trabalhados:
+
+- Microserviços;
+- Monorepo NestJS;
+- API Gateway;
+- Comunicação TCP;
+- `ClientProxy`;
+- `@MessagePattern`;
+- DTOs;
+- `class-validator`;
+- `class-transformer`;
+- `ValidationPipe`;
+- Prisma ORM;
+- PostgreSQL;
+- Banco por microserviço;
+- Comunicação entre microserviços;
+- Request-response;
+- `Observable`;
+- `firstValueFrom`;
+- `timeout`;
+- CRUD distribuído;
+- Tratamento de erros RPC;
+- Separação de responsabilidades;
+- Dependência síncrona entre serviços;
+- Orquestração pelo Gateway.
+
+---
+
+# 40. Evolução do Projeto
+
+No Tutorial 01, a arquitetura possuía:
+
+```text
+API Gateway
+     ↓
+Users Service
+     ↓
+PostgreSQL
+```
+
+No Tutorial 02, a arquitetura evoluiu para:
+
+```text
+                   ┌──► Users Service ──► users_db
+                   │
+API Gateway ───────┤
+                   │
+                   └──► Orders Service ─► orders_db
+                              │
+                              └──► Users Service
+```
+
+Isso permite demonstrar comunicação entre diferentes domínios da aplicação.
+
+---
+
+# 41. Versionamento e Organização das Branches
 
 O projeto utiliza Git e GitHub para controle de versão.
 
@@ -731,19 +1358,25 @@ Repositório:
 https://github.com/matheuspessoa14/academic-microservicos
 ```
 
-A atividade do **Microserviços — Tutorial 01** foi desenvolvida na branch:
+O Tutorial 01 foi desenvolvido na branch:
 
 ```text
 branch_20261006
 ```
 
-A branch `main` mantém o projeto-base, enquanto as branches das aulas são utilizadas para separar as implementações desenvolvidas durante a disciplina.
+O Tutorial 02 foi desenvolvido na branch:
+
+```text
+branch_20261020
+```
+
+A branch do Tutorial 02 foi criada a partir da implementação anterior, permitindo continuar a evolução do projeto sem alterar o histórico da atividade anterior.
 
 ---
 
-# 26. Autor
+# 42. Autor
 
-**Nome:** Matheus Pessoa Telles de Oliveira  
+**Nome:** Matheus Pessoa Telles 
 **Unidade Curricular:** Programação Web 2  
 **Instituição:** Senac RJ
 
@@ -755,7 +1388,7 @@ https://github.com/matheuspessoa14
 
 ---
 
-# 27. Licença e Uso Acadêmico
+# 43. Licença e Uso Acadêmico
 
 Projeto desenvolvido para fins acadêmicos na Unidade Curricular de **Programação Web 2 — Senac RJ**.
 

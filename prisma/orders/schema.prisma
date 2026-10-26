@@ -1,0 +1,20 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../../generated/orders"
+
+  moduleFormat           = "cjs"
+  generatedFileExtension = "ts"
+  importFileExtension    = "ts"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model Order {
+  id          Int      @id @default(autoincrement())
+  userId      Int
+  description String
+  total       Decimal  @db.Decimal(10, 2)
+  createdAt   DateTime @default(now())
+}
