@@ -44,3 +44,8 @@ export { Prisma }
  * 
  */
 export type Order = Prisma.OrderModel
+/**
+ * Model OutboxEvent
+ * 
+ */
+export type OutboxEvent = Prisma.OutboxEventModel

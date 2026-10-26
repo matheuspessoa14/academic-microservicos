@@ -1,22 +1,29 @@
-# Academic Microservices — NestJS, TCP, Prisma e PostgreSQL
+# Academic Microservices — NestJS, TCP, RabbitMQ, Prisma e PostgreSQL
 
-Projeto desenvolvido durante a Unidade Curricular de **Programação Web 2 — Senac RJ**, utilizando **NestJS, TypeScript, Microserviços, TCP, Prisma ORM e PostgreSQL**.
+Projeto desenvolvido durante a Unidade Curricular de **Programação Web 2 — Senac RJ**, utilizando **NestJS, TypeScript, Microserviços, TCP, RabbitMQ, Prisma ORM, PostgreSQL e Docker**.
 
 ---
 
 # 1. Descrição
 
-Este projeto implementa uma arquitetura baseada em **microserviços**, evoluindo a estrutura inicial do Tutorial 01 para uma aplicação com:
+Este projeto implementa uma arquitetura baseada em **microserviços**, evoluindo as implementações dos Tutoriais 01 e 02 para introduzir comunicação assíncrona e arquitetura orientada a eventos.
+
+Nesta etapa, a aplicação passa a possuir:
 
 - API Gateway;
 - Microserviço de usuários;
 - Microserviço de pedidos;
+- Microserviço de notificações;
 - CRUD completo;
 - DTOs e validação;
-- Comunicação entre microserviços;
-- Bancos de dados separados;
+- Comunicação síncrona via TCP;
+- Comunicação assíncrona via RabbitMQ;
+- Publicação e consumo de eventos;
+- ACK e NACK;
+- Dead Letter Queue;
+- Transactional Outbox;
+- Bancos PostgreSQL separados;
 - Prisma ORM;
-- PostgreSQL;
 - Tratamento de erros RPC;
 - Timeout entre serviços.
 
@@ -39,15 +46,28 @@ API Gateway
                                            │
                                            ▼
                                         orders_db
+                                           │
+                                           ▼
+                                     OutboxEvent
+                                           │
+                                           ▼
+                                    OutboxPublisher
+                                           │
+                                           │ RabbitMQ
+                                           ▼
+                                     RabbitMQ
+                                           │
+                                           ▼
+                                  Notifications Service
 ```
 
 O **API Gateway** recebe as requisições HTTP e encaminha as operações para os microserviços.
 
 O **Users Service** é responsável pelo domínio de usuários.
 
-O **Orders Service** é responsável pelo domínio de pedidos e consulta o Users Service para verificar se um usuário existe antes de criar ou atualizar um pedido.
+O **Orders Service** é responsável pelo domínio de pedidos, consulta o Users Service e persiste os pedidos em seu próprio banco.
 
-Cada microserviço possui seu próprio banco de dados.
+O **Notifications Service** recebe eventos através do RabbitMQ e simula o envio de notificações.
 
 ---
 
@@ -71,6 +91,16 @@ O projeto possui as seguintes funcionalidades:
 - Validação de dados através de DTOs;
 - Comunicação TCP entre aplicações NestJS;
 - Comunicação entre Orders Service e Users Service;
+- Comunicação assíncrona utilizando RabbitMQ;
+- Publicação do evento `order.created`;
+- Consumo de eventos através de `@EventPattern`;
+- Confirmação manual de mensagens com ACK;
+- Rejeição de mensagens com NACK;
+- Dead Letter Queue;
+- Simulação de falhas no processamento de notificações;
+- Identificação única de eventos;
+- Transactional Outbox;
+- Publicação periódica de eventos pendentes;
 - Persistência com Prisma ORM;
 - Bancos PostgreSQL independentes;
 - Timeout nas chamadas realizadas pelo API Gateway;
@@ -84,12 +114,19 @@ O projeto possui as seguintes funcionalidades:
 - **NestJS**
 - **TypeScript**
 - **@nestjs/microservices**
+- **@nestjs/schedule**
 - **class-validator**
 - **class-transformer**
 - **Prisma ORM 7**
 - **@prisma/adapter-pg**
 - **PostgreSQL**
 - **pg**
+- **RabbitMQ**
+- **AMQP**
+- **amqplib**
+- **amqp-connection-manager**
+- **Docker**
+- **Docker Compose**
 - **RxJS**
 - **TCP**
 - **Rspack**
@@ -101,7 +138,7 @@ O projeto possui as seguintes funcionalidades:
 
 # 4. Arquitetura da Aplicação
 
-A aplicação utiliza uma arquitetura distribuída composta por três aplicações NestJS.
+A aplicação utiliza uma arquitetura distribuída composta por quatro aplicações NestJS.
 
 ```text
 Cliente
@@ -128,19 +165,32 @@ Cliente
        │                  │
        ▼                  ▼
    users_db           orders_db
+                          │
+                          ▼
+                     OutboxEvent
+                          │
+                          ▼
+                   OutboxPublisher
+                          │
+                          │ AMQP
+                          ▼
+                     RabbitMQ
+                          │
+                          ▼
+                 Notifications Service
 ```
 
-Além disso, o Orders Service realiza comunicação síncrona com o Users Service:
+Além da comunicação síncrona entre Orders e Users, o projeto também utiliza comunicação assíncrona através do RabbitMQ.
 
 ```text
 Orders Service
       │
-      │ users.findOne
+      │ evento order.created
       ▼
-Users Service
+RabbitMQ
       │
       ▼
-users_db
+Notifications Service
 ```
 
 ---
@@ -178,7 +228,19 @@ Responsável por:
 - Excluir pedidos;
 - Listar pedidos por usuário;
 - Validar usuários através do Users Service;
-- Persistir dados em `orders_db`.
+- Persistir dados em `orders_db`;
+- Criar eventos na Outbox;
+- Publicar eventos pendentes no RabbitMQ.
+
+## Notifications Service
+
+Responsável por:
+
+- Consumir eventos `order.created`;
+- Processar notificações;
+- Registrar notificações através de logs;
+- Confirmar mensagens com ACK;
+- Rejeitar mensagens com NACK em caso de falha.
 
 ---
 
@@ -205,13 +267,21 @@ academic-microservicos/
 │   │       ├── users.controller.ts
 │   │       └── users.service.ts
 │   │
-│   └── orders/
+│   ├── orders/
+│   │   └── src/
+│   │       ├── main.ts
+│   │       ├── prisma.service.ts
+│   │       ├── orders.module.ts
+│   │       ├── orders.controller.ts
+│   │       ├── orders.service.ts
+│   │       └── outbox.publisher.ts
+│   │
+│   └── notifications/
 │       └── src/
 │           ├── main.ts
-│           ├── prisma.service.ts
-│           ├── orders.module.ts
-│           ├── orders.controller.ts
-│           └── orders.service.ts
+│           ├── notifications.module.ts
+│           ├── notifications.controller.ts
+│           └── notifications.service.ts
 │
 ├── libs/
 │   └── contracts/
@@ -219,6 +289,7 @@ academic-microservicos/
 │           ├── index.ts
 │           ├── users.dto.ts
 │           ├── orders.dto.ts
+│           ├── events.ts
 │           └── http-to-rpc-exception.filter.ts
 │
 ├── prisma/
@@ -237,6 +308,10 @@ academic-microservicos/
 │   ├── users/
 │   └── orders/
 │
+├── scripts/
+│   └── setup-rabbitmq.cjs
+│
+├── docker-compose.yml
 ├── .env
 ├── nest-cli.json
 ├── package.json
@@ -254,7 +329,9 @@ Antes de executar o projeto, é necessário possuir:
 - npm;
 - Git;
 - NestJS CLI;
-- PostgreSQL.
+- PostgreSQL;
+- Docker;
+- Docker Compose.
 
 Instalação do NestJS CLI:
 
@@ -278,10 +355,10 @@ git clone https://github.com/matheuspessoa14/academic-microservicos.git
 cd academic-microservicos
 ```
 
-## 8.3 Acesse a branch do Tutorial 02
+## 8.3 Acesse a branch do Tutorial 03
 
 ```bash
-git switch branch_20261020
+git switch branch_20261027
 ```
 
 ## 8.4 Instale as dependências
@@ -307,12 +384,13 @@ CreateUserDto
 UpdateUserDto
 CreateOrderDto
 UpdateOrderDto
+OrderCreatedEvent
 HttpToRpcExceptionFilter
 ```
 
-Os serviços compartilham apenas contratos e estruturas de comunicação.
+Os serviços compartilham contratos e estruturas de comunicação.
 
-Eles não compartilham diretamente regras de negócio ou acesso aos bancos de dados.
+Eles não compartilham diretamente suas regras de negócio ou acesso aos bancos de dados.
 
 ---
 
@@ -355,7 +433,7 @@ new ValidationPipe({
 
 O `whitelist` remove propriedades que não fazem parte do DTO.
 
-O `transform` permite transformar os valores recebidos para os tipos esperados.
+O `transform` permite transformar valores recebidos para os tipos esperados.
 
 ---
 
@@ -385,7 +463,7 @@ CREATE DATABASE users_db;
 CREATE DATABASE orders_db;
 ```
 
-Essa separação evita que os microserviços acessem diretamente os dados pertencentes a outros domínios.
+O Notifications Service não possui banco próprio nesta implementação.
 
 ---
 
@@ -397,6 +475,10 @@ Crie um arquivo `.env` na raiz:
 USERS_DATABASE_URL="postgresql://postgres:SUA_SENHA@localhost:5432/users_db"
 
 ORDERS_DATABASE_URL="postgresql://postgres:SUA_SENHA@localhost:5432/orders_db"
+
+RABBITMQ_URL="amqp://app:app123@localhost:5672"
+
+RABBITMQ_NOTIFICATIONS_QUEUE="notifications_queue"
 ```
 
 Substitua:
@@ -454,7 +536,7 @@ Schema:
 prisma/orders/schema.prisma
 ```
 
-Modelo:
+Modelo de pedido:
 
 ```prisma
 model Order {
@@ -466,20 +548,19 @@ model Order {
 }
 ```
 
-Cada pedido possui:
+Modelo da Outbox:
 
-```text
-Order
-├── id
-├── userId
-├── description
-├── total
-└── createdAt
+```prisma
+model OutboxEvent {
+  id          String    @id @default(uuid())
+  eventType   String
+  payload     Json
+  createdAt   DateTime  @default(now())
+  publishedAt DateTime?
+}
 ```
 
-Não existe uma relação Prisma direta entre `Order` e `User`.
-
-O campo `userId` representa apenas o identificador do usuário pertencente ao outro microserviço.
+O campo `userId` não possui uma relação Prisma direta com `User`, porque o usuário pertence a outro microserviço.
 
 ---
 
@@ -499,8 +580,16 @@ npx prisma generate --config prisma/users.config.ts
 
 ## Orders
 
+Migration inicial:
+
 ```bash
 npx prisma migrate dev --config prisma/orders.config.ts --name init_orders
+```
+
+Migration da Outbox:
+
+```bash
+npx prisma migrate dev --config prisma/orders.config.ts --name add_outbox
 ```
 
 Gerar client:
@@ -513,7 +602,7 @@ npx prisma generate --config prisma/orders.config.ts
 
 # 16. PrismaService
 
-Cada microserviço possui seu próprio `PrismaService`.
+Cada microserviço que utiliza PostgreSQL possui seu próprio `PrismaService`.
 
 ```text
 UsersService
@@ -537,10 +626,18 @@ O API Gateway não utiliza Prisma diretamente.
 
 # 17. Comunicação entre os Serviços
 
-A comunicação interna utiliza:
+A aplicação utiliza comunicação síncrona e assíncrona.
+
+Comunicação síncrona:
 
 ```text
 Transport.TCP
+```
+
+Comunicação assíncrona:
+
+```text
+Transport.RMQ
 ```
 
 Portas utilizadas:
@@ -550,18 +647,8 @@ Portas utilizadas:
 | API Gateway | 3000 | HTTP |
 | Users Service | 3001 | TCP |
 | Orders Service | 3002 | TCP |
-
-O API Gateway utiliza:
-
-```ts
-ClientProxy.send()
-```
-
-O microserviço recebe utilizando:
-
-```ts
-@MessagePattern()
-```
+| RabbitMQ | 5672 | AMQP |
+| RabbitMQ Management | 15672 | HTTP |
 
 ---
 
@@ -618,8 +705,6 @@ Orders Service
 
 Ao criar um pedido, Orders precisa verificar se o usuário existe.
 
-O fluxo é:
-
 ```text
 Orders Service
       │
@@ -631,43 +716,9 @@ Users Service
 users_db
 ```
 
-Somente depois da validação:
+Essa operação continua utilizando comunicação síncrona através de TCP.
 
-```text
-Orders Service
-      │
-      ▼
-orders_db
-```
-
-Fluxo completo:
-
-```text
-POST /orders
-      │
-      ▼
-API Gateway
-      │
-      │ orders.create
-      ▼
-Orders Service
-      │
-      │ users.findOne
-      ▼
-Users Service
-      │
-      ▼
-users_db
-      │
-      ▼
-usuário existe
-      │
-      ▼
-Orders Service
-      │
-      ▼
-orders_db
-```
+Depois da validação, o pedido e seu evento são persistidos no banco de Orders.
 
 ---
 
@@ -679,15 +730,9 @@ A comunicação síncrona utiliza:
 client.send(...)
 ```
 
-O método retorna um `Observable`.
+O emissor envia uma mensagem e aguarda uma resposta.
 
-Quando é necessário aguardar diretamente a resposta, é utilizado:
-
-```ts
-firstValueFrom(...)
-```
-
-Exemplo conceitual:
+Exemplo:
 
 ```text
 Orders
@@ -701,76 +746,476 @@ Users
 Orders
 ```
 
----
-
-# 22. Timeout
-
-O projeto utiliza timeout de:
-
-```text
-3000 ms
-```
-
-Exemplo:
+Quando necessário, o Observable é convertido utilizando:
 
 ```ts
-.pipe(
-  timeout(3000),
-)
+firstValueFrom(...)
 ```
-
-O objetivo é evitar que uma requisição fique aguardando indefinidamente um serviço indisponível.
 
 ---
 
-# 23. Tratamento de Erros RPC
+# 22. Comunicação Assíncrona com `emit()`
 
-Em uma arquitetura de microserviços, uma exceção HTTP criada dentro de um serviço TCP não deve ser tratada automaticamente como uma resposta HTTP.
+Para eventos, o projeto utiliza:
 
-Por isso o projeto utiliza filtros para conversão de erros.
+```ts
+client.emit(...)
+```
+
+Diferentemente de `send()`, o evento não representa uma solicitação de resposta de negócio.
 
 Fluxo:
 
 ```text
-Erro interno
-    ↓
-HttpToRpcExceptionFilter
-    ↓
-Erro RPC
-    ↓
-API Gateway
-    ↓
-RpcToHttpExceptionFilter
-    ↓
-Resposta HTTP
+Orders
+   │
+   │ emit('order.created')
+   ▼
+RabbitMQ
+   │
+   ▼
+Notifications
 ```
 
-Isso permite padronizar os erros entre as aplicações.
+Isso permite que o processamento de notificações fique separado da criação do pedido.
 
 ---
 
-# 24. API Gateway
+# 23. Evento `order.created`
 
-O Gateway disponibiliza as rotas HTTP para o cliente.
-
-O cliente não precisa conhecer:
+O evento utilizado é:
 
 ```text
-localhost:3001
-localhost:3002
+order.created
 ```
 
-Ele acessa apenas:
+Contrato compartilhado:
+
+```ts
+export interface OrderCreatedEvent {
+  eventId: string;
+  orderId: number;
+  userId: number;
+  total: string;
+  occurredAt: string;
+}
+```
+
+Cada evento recebe um identificador único através de:
+
+```ts
+randomUUID()
+```
+
+Exemplo:
+
+```json
+{
+  "eventId": "uuid",
+  "orderId": 1,
+  "userId": 1,
+  "total": "4500",
+  "occurredAt": "2026-10-27T20:00:00.000Z"
+}
+```
+
+---
+
+# 24. RabbitMQ
+
+O RabbitMQ é responsável pela mensageria assíncrona.
+
+Ele é executado através do Docker utilizando:
+
+```bash
+docker compose up -d
+```
+
+Verificação:
+
+```bash
+docker compose ps
+```
+
+O painel administrativo fica disponível em:
+
+```text
+http://localhost:15672
+```
+
+Credenciais locais:
+
+```text
+Usuário: app
+Senha: app123
+```
+
+---
+
+# 25. Docker Compose
+
+Arquivo:
+
+```text
+docker-compose.yml
+```
+
+Configuração:
+
+```yaml
+services:
+  rabbitmq:
+    image: rabbitmq:4-management
+    container_name: nest-rabbitmq
+
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+
+    environment:
+      RABBITMQ_DEFAULT_USER: app
+      RABBITMQ_DEFAULT_PASS: app123
+
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+
+volumes:
+  rabbitmq_data:
+```
+
+---
+
+# 26. Notifications Service
+
+O Notifications Service utiliza:
+
+```ts
+@EventPattern('order.created')
+```
+
+para consumir eventos.
+
+Quando uma mensagem válida é recebida, são registrados logs semelhantes a:
+
+```text
+Notificação do pedido 1
+Usuário: 1
+Total: R$ 4500
+Evento: uuid
+```
+
+Nesta etapa, o envio de notificações é simulado através de logs.
+
+---
+
+# 27. ACK e NACK
+
+O consumidor utiliza confirmação manual de mensagens.
+
+Configuração:
+
+```ts
+noAck: false
+```
+
+Quando o processamento termina corretamente:
+
+```ts
+channel.ack(message);
+```
+
+Fluxo:
+
+```text
+Mensagem
+   ↓
+Notifications
+   ↓
+Processamento concluído
+   ↓
+ACK
+```
+
+Quando ocorre uma falha:
+
+```ts
+channel.nack(
+  message,
+  false,
+  false,
+);
+```
+
+Fluxo:
+
+```text
+Mensagem
+   ↓
+Notifications
+   ↓
+Falha
+   ↓
+NACK
+```
+
+---
+
+# 28. Dead Letter Queue
+
+O projeto utiliza:
+
+```text
+notifications_queue
+notifications_dlq
+```
+
+Fluxo:
+
+```text
+RabbitMQ
+   │
+   ▼
+notifications_queue
+   │
+   ▼
+Notifications Service
+   │
+   ├── sucesso ──► ACK
+   │
+   └── falha ────► NACK
+                       │
+                       ▼
+               notifications_dlq
+```
+
+A Dead Letter Queue armazena mensagens rejeitadas pela fila principal.
+
+---
+
+# 29. Configuração da DLQ
+
+O script:
+
+```text
+scripts/setup-rabbitmq.cjs
+```
+
+configura:
+
+```text
+notifications.dlx
+notifications_queue
+notifications_dlq
+notifications.failed
+```
+
+Execute:
+
+```bash
+node --env-file=.env scripts/setup-rabbitmq.cjs
+```
+
+Resultado esperado:
+
+```text
+Filas configuradas
+```
+
+---
+
+# 30. Teste da Dead Letter Queue
+
+Para testar a DLQ, o Notifications Service simula uma falha quando:
+
+```text
+total = 9999
+```
+
+Exemplo:
+
+```json
+{
+  "userId": 1,
+  "description": "Teste DLQ",
+  "total": 9999
+}
+```
+
+Fluxo:
+
+```text
+POST /orders
+     ↓
+Order criado
+     ↓
+OutboxEvent
+     ↓
+RabbitMQ
+     ↓
+Notifications
+     ↓
+Falha simulada
+     ↓
+NACK
+     ↓
+notifications_dlq
+```
+
+A mensagem pode ser verificada através do painel RabbitMQ.
+
+---
+
+# 31. Transactional Outbox
+
+O padrão Transactional Outbox reduz o risco de inconsistência entre o PostgreSQL e o RabbitMQ.
+
+Sem Outbox:
+
+```text
+Salvar pedido
+     ↓
+Pedido persistido
+     ↓
+Aplicação falha
+     ↓
+Evento não publicado
+```
+
+Com Outbox:
+
+```text
+Prisma Transaction
+       │
+       ├── Order
+       │
+       └── OutboxEvent
+```
+
+O pedido e o evento são persistidos na mesma transação do banco.
+
+Se a transação falhar:
+
+```text
+Order       ❌
+OutboxEvent ❌
+```
+
+Se a transação for confirmada:
+
+```text
+Order       ✅
+OutboxEvent ✅
+```
+
+---
+
+# 32. OutboxPublisher
+
+O arquivo:
+
+```text
+apps/orders/src/outbox.publisher.ts
+```
+
+é responsável por procurar eventos ainda não publicados.
+
+O agendamento utiliza:
+
+```ts
+@Cron('*/5 * * * * *')
+```
+
+Assim, aproximadamente a cada cinco segundos o serviço consulta:
+
+```text
+OutboxEvent
+```
+
+procurando registros onde:
+
+```text
+publishedAt = null
+```
+
+Fluxo:
+
+```text
+OutboxEvent pendente
+       ↓
+OutboxPublisher
+       ↓
+RabbitMQ
+       ↓
+evento publicado
+       ↓
+publishedAt atualizado
+```
+
+---
+
+# 33. Idempotência
+
+Mensagens podem ser entregues mais de uma vez em arquiteturas distribuídas.
+
+Por isso cada evento possui:
+
+```text
+eventId
+```
+
+O `eventId` identifica o acontecimento e pode ser utilizado para implementar controle de eventos já processados.
+
+Nesta etapa, o projeto cria o identificador do evento, enquanto uma persistência completa dos eventos processados representa uma evolução adicional da arquitetura.
+
+---
+
+# 34. Retries
+
+O projeto demonstra o conceito de retries, mas não implementa uma estratégia completa de novas tentativas com atraso.
+
+Uma arquitetura possível seria:
+
+```text
+notifications_queue
+        │
+        │ falha
+        ▼
+notifications_retry
+        │
+        │ aguarda
+        ▼
+notifications_queue
+        │
+        ▼
+nova tentativa
+```
+
+Uma implementação real deve limitar a quantidade de tentativas para evitar loops infinitos.
+
+---
+
+# 35. API Gateway
+
+O Gateway continua sendo o único ponto HTTP utilizado pelo cliente.
 
 ```text
 http://localhost:3000
 ```
 
-O Gateway decide qual microserviço deverá atender cada operação.
+O cliente não precisa acessar diretamente:
+
+```text
+localhost:3001
+localhost:3002
+RabbitMQ
+Notifications Service
+```
+
+A comunicação interna continua sendo responsabilidade das aplicações.
 
 ---
 
-# 25. Endpoints de Users
+# 36. Endpoints de Users
 
 | Método | Endpoint | Descrição |
 | --- | --- | --- |
@@ -782,7 +1227,7 @@ O Gateway decide qual microserviço deverá atender cada operação.
 
 ---
 
-# 26. Endpoints de Orders
+# 37. Endpoints de Orders
 
 | Método | Endpoint | Descrição |
 | --- | --- | --- |
@@ -795,7 +1240,7 @@ O Gateway decide qual microserviço deverá atender cada operação.
 
 ---
 
-# 27. Exemplos — Users
+# 38. Exemplos de Requisições
 
 ## Criar usuário
 
@@ -806,64 +1251,10 @@ Content-Type: application/json
 
 ```json
 {
-  "name": "Matheus",
-  "email": "matheus@email.com"
+  "name": "Ana",
+  "email": "ana.tutorial3@email.com"
 }
 ```
-
-Exemplo de resposta:
-
-```json
-{
-  "id": 1,
-  "name": "Matheus",
-  "email": "matheus@email.com",
-  "createdAt": "2026-10-26T20:00:00.000Z"
-}
-```
-
----
-
-## Listar usuários
-
-```http
-GET /users
-```
-
----
-
-## Buscar usuário
-
-```http
-GET /users/1
-```
-
----
-
-## Atualizar usuário
-
-```http
-PATCH /users/1
-Content-Type: application/json
-```
-
-```json
-{
-  "name": "Matheus Pessoa"
-}
-```
-
----
-
-## Excluir usuário
-
-```http
-DELETE /users/1
-```
-
----
-
-# 28. Exemplos — Orders
 
 ## Criar pedido
 
@@ -875,7 +1266,7 @@ Content-Type: application/json
 ```json
 {
   "userId": 1,
-  "description": "Notebook",
+  "description": "Notebook Dell",
   "total": 4500
 }
 ```
@@ -886,151 +1277,31 @@ Exemplo de resposta:
 {
   "id": 1,
   "userId": 1,
-  "description": "Notebook",
+  "description": "Notebook Dell",
   "total": "4500",
-  "createdAt": "2026-10-26T20:00:00.000Z"
+  "createdAt": "2026-10-27T20:00:00.000Z"
 }
 ```
 
----
-
-## Listar pedidos
-
-```http
-GET /orders
-```
+Depois da criação, o evento correspondente é armazenado na Outbox e posteriormente publicado no RabbitMQ.
 
 ---
 
-## Buscar pedido
+# 39. Execução do Projeto
 
-```http
-GET /orders/1
+Antes dos serviços, inicie o RabbitMQ:
+
+```bash
+docker compose up -d
 ```
 
----
+Configure as filas:
 
-## Pedidos por usuário
-
-```http
-GET /orders/user/1
+```bash
+node --env-file=.env scripts/setup-rabbitmq.cjs
 ```
 
----
-
-## Atualizar pedido
-
-```http
-PATCH /orders/1
-Content-Type: application/json
-```
-
-```json
-{
-  "description": "Notebook Gamer",
-  "total": 5500
-}
-```
-
----
-
-## Excluir pedido
-
-```http
-DELETE /orders/1
-```
-
----
-
-# 29. Validação de Usuário no Orders Service
-
-O Orders Service não cria pedidos para usuários inexistentes.
-
-Ao receber:
-
-```text
-POST /orders
-```
-
-o serviço consulta:
-
-```text
-users.findOne
-```
-
-Se o usuário não existir, o pedido não é persistido.
-
-Exemplo inválido:
-
-```json
-{
-  "userId": 999999,
-  "description": "Teste",
-  "total": 100
-}
-```
-
-Resultado esperado:
-
-```text
-Usuário inválido
-```
-
----
-
-# 30. Regra para Exclusão de Usuários
-
-Um usuário que possui pedidos não pode ser excluído.
-
-Antes da exclusão:
-
-```text
-DELETE /users/:id
-```
-
-o Gateway consulta:
-
-```text
-orders.findByUser
-```
-
-Fluxo:
-
-```text
-DELETE /users/1
-       │
-       ▼
-API Gateway
-       │
-       │ orders.findByUser
-       ▼
-Orders Service
-       │
-       ▼
-Pedidos encontrados?
-       │
-   ┌───┴────┐
-   │        │
-  SIM      NÃO
-   │        │
-   ▼        ▼
-Bloqueia   Users Service
-exclusão       │
-               ▼
-           remove user
-```
-
-Mensagem utilizada:
-
-```text
-Não é possível excluir um usuário que possui pedidos
-```
-
----
-
-# 31. Execução do Projeto
-
-São necessários três terminais.
+São necessários quatro terminais para as aplicações NestJS.
 
 ## Terminal 1 — Users Service
 
@@ -1038,43 +1309,27 @@ São necessários três terminais.
 npx nest start users --watch
 ```
 
-Porta:
-
-```text
-3001
-```
-
----
-
 ## Terminal 2 — Orders Service
 
 ```bash
 npx nest start orders --watch
 ```
 
-Porta:
+## Terminal 3 — Notifications Service
 
-```text
-3002
+```bash
+npx nest start notifications --watch
 ```
 
----
-
-## Terminal 3 — API Gateway
+## Terminal 4 — API Gateway
 
 ```bash
 npx nest start api-gateway --watch
 ```
 
-Porta:
-
-```text
-3000
-```
-
 ---
 
-# 32. Build
+# 40. Build
 
 Para validar o Users Service:
 
@@ -1088,19 +1343,25 @@ Para validar o Orders Service:
 npx nest build orders
 ```
 
+Para validar o Notifications Service:
+
+```bash
+npx nest build notifications
+```
+
 Para validar o API Gateway:
 
 ```bash
 npx nest build api-gateway
 ```
 
-Os três projetos devem compilar sem erros antes do envio.
+Os quatro projetos devem compilar sem erros antes do envio.
 
 ---
 
-# 33. Testes Realizados
+# 41. Testes Realizados
 
-Foram testadas as seguintes operações:
+Foram testadas as operações HTTP já existentes:
 
 ```text
 POST   /users
@@ -1108,11 +1369,7 @@ GET    /users
 GET    /users/:id
 PATCH  /users/:id
 DELETE /users/:id
-```
 
-Também foram testadas:
-
-```text
 POST   /orders
 GET    /orders
 GET    /orders/:id
@@ -1123,21 +1380,26 @@ DELETE /orders/:id
 
 Também foram validados:
 
-- Criação de pedido com usuário existente;
-- Rejeição de pedido para usuário inexistente;
+- Comunicação TCP entre API Gateway e microserviços;
 - Comunicação entre Orders e Users;
-- Persistência separada em PostgreSQL;
-- Atualização de pedidos;
-- Exclusão de pedidos;
-- Busca de pedidos por usuário;
-- Bloqueio de exclusão de usuário que possui pedidos;
-- Timeout entre serviços;
-- Tratamento de erros RPC;
-- Compilação dos três projetos.
+- Persistência com PostgreSQL;
+- Criação de pedidos;
+- Criação de eventos na Outbox;
+- Execução periódica do OutboxPublisher;
+- Publicação de `order.created`;
+- Comunicação através do RabbitMQ;
+- Consumo de eventos no Notifications Service;
+- Logs de notificação;
+- ACK em mensagens processadas corretamente;
+- NACK em mensagens com falha;
+- Funcionamento da Dead Letter Queue;
+- Simulação de falha utilizando total `9999`;
+- Identificação de eventos através de `eventId`;
+- Compilação dos quatro projetos.
 
 ---
 
-# 34. Fluxo Completo de Criação de Pedido
+# 42. Fluxo Completo de Criação de Pedido
 
 ```text
 Cliente
@@ -1155,125 +1417,85 @@ Orders Service
 Users Service
    │
    ▼
-Prisma Users
-   │
-   ▼
 users_db
    │
    ▼
-Resposta do usuário
+Usuário válido
    │
    ▼
 Orders Service
    │
    ▼
-Prisma Orders
+Prisma Transaction
    │
-   ▼
-orders_db
-   │
-   ▼
-API Gateway
-   │
-   ▼
-Cliente
+   ├── Order
+   └── OutboxEvent
+           │
+           ▼
+      orders_db
+           │
+           ▼
+    OutboxPublisher
+           │
+           ▼
+       RabbitMQ
+           │
+           │ order.created
+           ▼
+Notifications Service
+           │
+           ├── ACK
+           │
+           └── NACK ──► DLQ
 ```
 
 ---
 
-# 35. Monólito x Microserviços
+# 43. Conceitos Estudados
 
-Em uma aplicação monolítica:
+Durante o Tutorial 03 foram trabalhados:
 
-```text
-Controller
-    ↓
-Service
-    ↓
-Repository / ORM
-    ↓
-Banco
-```
-
-Neste projeto:
-
-```text
-HTTP Controller
-      ↓
-API Gateway
-      ↓
-ClientProxy
-      ↓
-TCP
-      ↓
-MessagePattern
-      ↓
-Microserviço
-      ↓
-Prisma
-      ↓
-Banco próprio
-```
-
-Os serviços são executados como aplicações independentes.
-
----
-
-# 36. Banco por Microserviço
-
-A aplicação segue o princípio de que cada serviço controla seus próprios dados.
-
-```text
-Users Service
-     │
-     ▼
-users_db
-```
-
-```text
-Orders Service
-     │
-     ▼
-orders_db
-```
-
-O Orders Service não acessa diretamente `users_db`.
-
-O Users Service não acessa diretamente `orders_db`.
-
-A comunicação entre domínios acontece por mensagens.
+- Microserviços;
+- Arquitetura orientada a eventos;
+- Comunicação síncrona;
+- Comunicação assíncrona;
+- TCP;
+- RabbitMQ;
+- AMQP;
+- Docker;
+- Docker Compose;
+- `ClientProxy.send()`;
+- `ClientProxy.emit()`;
+- `@MessagePattern`;
+- `@EventPattern`;
+- Request-response;
+- Publicação de eventos;
+- Consumo de eventos;
+- ACK;
+- NACK;
+- Dead Letter Queue;
+- Filas duráveis;
+- `prefetchCount`;
+- Eventos identificados por UUID;
+- Idempotência;
+- Retries;
+- Transactional Outbox;
+- Prisma Transaction;
+- `OutboxEvent`;
+- `@nestjs/schedule`;
+- `@Cron`;
+- OutboxPublisher;
+- Comunicação entre microserviços;
+- Persistência separada por domínio;
+- Tratamento de falhas em sistemas distribuídos.
 
 ---
 
-# 37. `send()` e Comunicação Síncrona
+# 44. Limitações da Implementação
 
-Neste tutorial foi utilizado principalmente:
+O projeto possui finalidade acadêmica e demonstra os principais conceitos da arquitetura.
 
-```ts
-client.send(...)
-```
-
-Essa abordagem implementa o padrão:
-
-```text
-Request
-   ↓
-Microserviço
-   ↓
-Response
-```
-
-O serviço que envia a mensagem aguarda uma resposta.
-
-Isso cria uma dependência síncrona entre os serviços.
-
----
-
-# 38. Limitações da Implementação
-
-O projeto possui características de estudo e laboratório.
-
-Em aplicações de produção ainda seriam necessários recursos adicionais, como:
+Em uma aplicação de produção ainda seriam necessárias evoluções como:
 
 - Autenticação;
 - Autorização;
@@ -1281,48 +1503,25 @@ Em aplicações de produção ainda seriam necessários recursos adicionais, com
 - Métricas;
 - Correlation IDs;
 - Rastreamento distribuído;
-- Retries controlados;
+- Retry com limite de tentativas;
+- Fila específica de retry;
 - Circuit breaker;
-- Tratamento mais avançado de indisponibilidade;
-- Persistência de mensagens;
+- Publisher confirms;
+- Controle de concorrência no Outbox;
+- Locking ou claim de eventos;
+- Persistência completa de eventos processados;
+- Idempotência do efeito real da operação;
 - Segurança da comunicação interna;
-- Estratégias de consistência distribuída.
+- Monitoramento do RabbitMQ;
+- Estratégias avançadas de recuperação de falhas.
+
+O `OutboxPublisher` utilizado é uma implementação didática.
 
 ---
 
-# 39. Conceitos Estudados
+# 45. Evolução do Projeto
 
-Durante o Tutorial 02 foram trabalhados:
-
-- Microserviços;
-- Monorepo NestJS;
-- API Gateway;
-- Comunicação TCP;
-- `ClientProxy`;
-- `@MessagePattern`;
-- DTOs;
-- `class-validator`;
-- `class-transformer`;
-- `ValidationPipe`;
-- Prisma ORM;
-- PostgreSQL;
-- Banco por microserviço;
-- Comunicação entre microserviços;
-- Request-response;
-- `Observable`;
-- `firstValueFrom`;
-- `timeout`;
-- CRUD distribuído;
-- Tratamento de erros RPC;
-- Separação de responsabilidades;
-- Dependência síncrona entre serviços;
-- Orquestração pelo Gateway.
-
----
-
-# 40. Evolução do Projeto
-
-No Tutorial 01, a arquitetura possuía:
+No Tutorial 01:
 
 ```text
 API Gateway
@@ -1332,7 +1531,7 @@ Users Service
 PostgreSQL
 ```
 
-No Tutorial 02, a arquitetura evoluiu para:
+No Tutorial 02:
 
 ```text
                    ┌──► Users Service ──► users_db
@@ -1344,11 +1543,37 @@ API Gateway ───────┤
                               └──► Users Service
 ```
 
-Isso permite demonstrar comunicação entre diferentes domínios da aplicação.
+No Tutorial 03:
+
+```text
+API Gateway
+     │
+     ▼
+Orders Service
+     │
+     ├──► Users Service
+     │        │
+     │        ▼
+     │     users_db
+     │
+     ▼
+ orders_db
+     │
+     ▼
+   Outbox
+     │
+     ▼
+RabbitMQ
+     │
+     ▼
+Notifications Service
+```
+
+A principal evolução consiste na introdução de comunicação assíncrona baseada em eventos.
 
 ---
 
-# 41. Versionamento e Organização das Branches
+# 46. Versionamento e Organização das Branches
 
 O projeto utiliza Git e GitHub para controle de versão.
 
@@ -1370,13 +1595,19 @@ O Tutorial 02 foi desenvolvido na branch:
 branch_20261020
 ```
 
-A branch do Tutorial 02 foi criada a partir da implementação anterior, permitindo continuar a evolução do projeto sem alterar o histórico da atividade anterior.
+O Tutorial 03 foi desenvolvido na branch:
+
+```text
+branch_20261027
+```
+
+Cada tutorial evolui a implementação anterior, mantendo o histórico das diferentes etapas estudadas durante a disciplina.
 
 ---
 
-# 42. Autor
+# 47. Autor
 
-**Nome:** Matheus Pessoa Telles 
+**Nome:** Matheus Pessoa Telles de Oliveira  
 **Unidade Curricular:** Programação Web 2  
 **Instituição:** Senac RJ
 
@@ -1388,7 +1619,7 @@ https://github.com/matheuspessoa14
 
 ---
 
-# 43. Licença e Uso Acadêmico
+# 48. Licença e Uso Acadêmico
 
 Projeto desenvolvido para fins acadêmicos na Unidade Curricular de **Programação Web 2 — Senac RJ**.
 
